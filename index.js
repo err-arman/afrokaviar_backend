@@ -11,6 +11,7 @@ const createReadStream = require("fs").createReadStream;
 const fetchChannel = require("./utils/getChannels.ts");
 
 const credentials = require("./credentials.json");
+const { file } = require("googleapis/build/src/apis/file/index");
 const SCOPES = [
   "https://www.googleapis.com/auth/drive.file",
   "https://www.googleapis.com/auth/drive.readonly",
@@ -62,55 +63,59 @@ async function getFolderPath(authClient, folderId) {
   return folderPath.join(" > ");
 }
 
-async function uploadFile(authClient) {
+async function uploadFile(authClient, filePaths) {
   const drive = google.drive({ version: "v3", auth: authClient });
-  const filePath = "./file/Addis TV.png";
-  const fileMetadata = {
-    name: path.basename(filePath),
-    parents: [process.env.FOLDER_ID], // Folder ID to upload the file into
-  };
+  const uploadResults = [];
 
-  try {
-    // Upload the file
-    const file = await drive.files.create({
-      resource: fileMetadata,
-      media: {
-        body: fs.createReadStream(filePath),
-      },
-      fields: "id",
-    });
-
-    console.log("File uploaded successfully. File ID:", file.data.id);
-
-    // Get folder information
-    const folderInfo = await drive.files.get({
-      fileId: process.env.FOLDER_ID,
-      fields: "name",
-    });
-
-    // Get the complete folder path
-    const folderPath = await getFolderPath(authClient, process.env.FOLDER_ID);
-
-    console.log("File uploaded to folder:", folderInfo.data.name);
-    console.log("Complete folder path:", folderPath);
-
-    // Generate direct link to the file
-    const fileLink = `https://drive.google.com/file/d/${file.data.id}/view`;
-    console.log("File link:", fileLink);
-
-    return {
-      fileId: file.data.id,
-      fileName: path.basename(filePath),
-      folderName: folderInfo.data.name,
-      folderPath: folderPath,
-      fileLink: fileLink,
+  for (const filePath of filePaths) {
+    const fileMetadata = {
+      name: path.basename(filePath),
+      parents: [process.env.FOLDER_ID],
     };
-  } catch (error) {
-    console.error("Error uploading file:", error.message);
-    throw error;
-  }
-}
 
+    try {
+      // Upload the file
+      const file = await drive.files.create({
+        resource: fileMetadata,
+        media: {
+          body: fs.createReadStream(`./file/${filePath}`),
+        },
+        fields: "id",
+      });
+
+      console.log(`File ${filePath} uploaded successfully. File ID:`, file.data.id);
+
+      // Get folder information
+      const folderInfo = await drive.files.get({
+        fileId: process.env.FOLDER_ID,
+        fields: "name",
+      });
+
+      // Get the complete folder path
+      const folderPath = await getFolderPath(authClient, process.env.FOLDER_ID);
+
+      console.log("File uploaded to folder:", folderInfo.data.name);
+      console.log("Complete folder path:", folderPath);
+
+      // Generate direct link to the file
+      const fileLink = `https://drive.google.com/file/d/${file.data.id}/view`;
+      console.log("File link:", fileLink);
+
+      uploadResults.push({
+        fileId: file.data.id,
+        fileName: filePath,
+        folderName: folderInfo.data.name,
+        folderPath: folderPath,
+        fileLink: fileLink,
+      });
+    } catch (error) {
+      console.error(`Error uploading file ${filePath}:`, error.message);
+      // Continue with next file even if one fails
+    }
+  }
+
+  return uploadResults;
+}
 // Routes
 app.get("/", async (req, res) => {
   try {
@@ -167,9 +172,20 @@ app.get("/", async (req, res) => {
 
     // spreadsheet end
 
+    // Read actual files from directory after screenshots are taken
+    const filePaths = fs
+      .readdirSync("./file")
+      .filter((file) => file.endsWith(".png"));
+
+    if (filePaths.length === 0) {
+      throw new Error("No PNG files found in the file directory");
+    }
+
+    console.log("filePaths", filePaths);
+    console.log("filepath.length", filePaths.length);
     // Upload and get file information
     const authClient = await authorize();
-    const uploadResult = await uploadFile(authClient);
+    const uploadResult = await uploadFile(authClient, filePaths);
 
     res.json({
       message: "Screenshot taken and uploaded successfully",
